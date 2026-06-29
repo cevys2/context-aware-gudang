@@ -6,23 +6,50 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone, timedelta
 
-# --- SETUP GOOGLE SHEETS API ---
+st.set_page_config(page_title="Gudang Tracker", page_icon="📦")
+
+# ========================================================
+# 🔒 GERBANG KEAMANAN TINGKAT TINGGI (PASSWORD GATE)
+# ========================================================
+def check_password():
+    """Mengembalikan True jika user berhasil memasukkan PIN yang benar."""
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
+    # Jika sudah sukses login sebelumnya, langsung lolos
+    if st.session_state.password_correct:
+        return True
+
+    # Tampilan form login jika belum login
+    st.markdown("### 🔑 Aplikasi Terkunci")
+    password_input = st.text_input("Masukkan PIN Akses Gudang:", type="password")
+    
+    if st.button("Buka Kunci"):
+        if password_input == st.secrets["APP_PASSWORD"]:
+            st.session_state.password_correct = True
+            st.rerun() # Refresh halaman untuk memunculkan aplikasi
+        else:
+            st.error("❌ PIN Salah! Akses ditolak.")
+            
+    return False
+
+# Jika satpam tidak meloloskan, hentikan kode di sini!
+if not check_password():
+    st.stop()
+# ========================================================
+
+
+# --- KODE INTI APLIKASI (Hanya jalan jika lolos PIN di atas) ---
 scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-# Ambil kredensial Google dari rahasia Streamlit
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
 client_gs = gspread.authorize(creds)
 sheet = client_gs.open("Database Gudang").sheet1
 
-# --- SETUP KUNCI ZONA WAKTU (WIB = UTC+7) ---
 tz_wib = timezone(timedelta(hours=7))
-
-# --- SETUP GEMINI API ---
-# Ambil API key Gemini dari rahasia Streamlit (Cuma buat di app.py)
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-st.set_page_config(page_title="Gudang Tracker", page_icon="📦")
 st.title("📦 Sistem Input Gudang (Smart Fallback)")
-st.write("Sistem pencocokan mutasi pintar. Ambil yang spesifik, atau ambil apa yang ada!")
+st.write("Akses Aman terverifikasi. Silakan masukkan laporan mutasi.")
 
 laporan = st.text_area("Input Laporan Harian:")
 
@@ -30,7 +57,6 @@ if st.button("Kirim ke AI"):
     if laporan:
         waktu_sekarang = datetime.now(tz_wib).strftime("%Y-%m-%d %H:%M:%S")
         
-        # Tarik master data gudang saat ini
         df_gudang = pd.DataFrame()
         with st.spinner("Mengecek katalog master data gudang..."):
             try:
@@ -71,34 +97,24 @@ if st.button("Kirim ke AI"):
                 varian_ekstrak = item.get("varian", "").lower()
                 kondisi_ekstrak = item.get("kondisi", "").lower()
                 
-                # ========================================================
-                # 🧠 BEST PRACTICE: SMART FALLBACK (Ambil apa yang ada!)
-                # ========================================================
                 if status == "keluar" and not df_gudang.empty:
-                    # 1. Cari berdasarkan nama barang saja (yang paling umum)
                     mask_nama = df_gudang['nama_barang'].str.lower().str.contains(nama_ekstrak, na=False)
                     match_df = df_gudang[mask_nama]
                     
                     if not match_df.empty:
-                        # 2. Coba cari yang kondisinya pas (Spesifik)
                         exact_match = match_df[
                             match_df['kondisi'].str.lower().str.contains(kondisi_ekstrak, na=False) &
                             match_df['varian'].str.lower().str.contains(varian_ekstrak, na=False)
                         ]
                         
                         if not exact_match.empty:
-                            # KETEMU YANG SPESIFIK! Pakai ini.
                             chosen_match = exact_match.iloc[0]
                         else:
-                            # 3. GRACEFUL FALLBACK (Kalau gak ketemu yang spesifik, 
-                            # ambil baris apa saja yang namanya cocok dari gudang)
                             chosen_match = match_df.iloc[0]
                         
-                        # Terapkan hasil (entah itu spesifik atau fallback)
                         item["nama_barang"] = chosen_match.get("nama_barang", item["nama_barang"])
                         item["varian"] = chosen_match.get("varian", "")
                         item["kondisi"] = chosen_match.get("kondisi", "")
-                # ========================================================
 
                 data_dict = {
                     "waktu_input": waktu_sekarang,
